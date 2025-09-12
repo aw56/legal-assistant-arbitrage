@@ -1,0 +1,47 @@
+name: CI   # название workflow, будет видно на GitHub
+
+# Триггеры: когда запускать
+on: 
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest   # GitHub даст виртуальную машину с Ubuntu
+
+    services:
+      postgres:              # поднимаем контейнер PostgreSQL для тестов
+        image: postgres:15
+        env:
+          POSTGRES_USER: pguser
+          POSTGRES_PASSWORD: pgpass123
+          POSTGRES_DB: legalassistant
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U pguser -d legalassistant"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - uses: actions/checkout@v3   # загружаем код из репозитория
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'    # версия Python
+
+      - name: Install dependencies
+        run: |
+          pip install -r backend/requirements.txt
+
+      - name: Run migrations
+        run: |
+          alembic upgrade head   # применяем миграции (если есть)
+
+      - name: Run tests
+        env:                     # передаем переменные окружения для БД
+          DATABASE_URL: postgresql+psycopg2://pguser:pgpass123@localhost:5432/legalassistant
+        run: |
+          pytest -v
