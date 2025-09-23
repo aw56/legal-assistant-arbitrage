@@ -1,0 +1,18 @@
+from fastapi import APIRouter
+from backend.app.schemas.client_request import ClientRequest
+from backend.app.schemas.legal_opinion import LegalAnalysis
+from backend.app.services.analyzer import analyze_request
+
+router = APIRouter(
+    prefix="/analyze",
+    tags=["analysis"]
+)
+
+@router.post("/", response_model=LegalAnalysis)
+def analyze_client_request(request: ClientRequest):
+    """
+    Эндпоинт для анализа клиентского запроса.
+    Возвращает ключевые нормы, связанные дела и рекомендации.
+    """
+    return analyze_request(request)
+

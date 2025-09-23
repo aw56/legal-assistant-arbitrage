@@ -1,0 +1,35 @@
+from sqlalchemy import Column, Integer, Float, Text, String, JSON
+from sqlalchemy.orm import declarative_base
+
+Base = declarative_base()
+
+
+class Statute(Base):
+    __tablename__ = "statutes"
+
+    id = Column(Integer, primary_key=True)
+    code = Column(String(50), nullable=False)
+    article = Column(String(50), nullable=False)
+    content = Column(Text, nullable=False)
+
+
+class CourtDecision(Base):
+    __tablename__ = "court_decisions"
+
+    id = Column(Integer, primary_key=True)
+    case_number = Column(String(50), nullable=False)
+    summary = Column(Text, nullable=False)
+    region = Column(String(50), nullable=False)
+    amount = Column(Float, nullable=False)
+
+
+class LegalOpinion2(Base):
+    __tablename__ = "legal_opinions2"
+
+    id = Column(Integer, primary_key=True)
+    client_name = Column(String(100), nullable=False)
+    dispute_summary = Column(Text, nullable=False)
+    stage = Column(String(50), nullable=False)
+    region = Column(String(50), nullable=False)
+    goals = Column(JSON, nullable=False)  # хранение списка целей
+    amount = Column(Float, nullable=False)
