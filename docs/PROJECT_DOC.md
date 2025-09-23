@@ -36,25 +36,26 @@ mkdir -p docs && cat << 'EOF' > docs/PROJECT_DOC.md
 
 ## 🧱 Архитектура проекта
 
+```plaintext
 legal-assistant-arbitrage/
 ├── backend/
-│ └── app/
-│ ├── init.py
-│ ├── main.py
-│ ├── models.py
-│ ├── database.py
-│ ├── init_db.py
-│ ├── api/ # Эндпоинты FastAPI
-│ │ └── decisions.py
-│ ├── services/ # Логика анализа
-│ ├── schemas/ # Pydantic-схемы
-│ └── tests/ # Pytest-тесты
+│   └── app/
+│       ├── __init__.py
+│       ├── main.py
+│       ├── models.py
+│       ├── database.py
+│       ├── init_db.py
+│       ├── api/          # Эндпоинты FastAPI
+│       │   └── decisions.py
+│       ├── services/     # Логика анализа
+│       ├── schemas/      # Pydantic-схемы
+│       └── tests/        # Pytest-тесты
 ├── docker-compose.yml
 ├── requirements.txt
 ├── .env
 ├── pytest.ini
 └── docs/
-└── PROJECT_DOC.md
+    └── PROJECT_DOC.md
 
 ---
 
