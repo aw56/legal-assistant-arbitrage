@@ -431,9 +431,395 @@ chmod +x "$BACKUP_DIR/restore.sh"
 
 ---
 
+Отлично 🚀
+Я собрал для тебя финальный **`docs/backup_and_restore.md`**, в который теперь входят **все разделы**:
+
+* Backup
+* Restore (restore\_all.sh v34)
+* Fix Structure Script
+* Troubleshooting FastAPI
+* Disaster Recovery Checklist
+
+---
+
+```markdown
+# 📑 Backup & Restore Guide — Legal Assistant Arbitrage
+
+## 🎯 Цель
+Обеспечить надёжное резервное копирование и максимально простое восстановление проекта **Legal Assistant Arbitrage** (FastAPI + PostgreSQL + Nginx + Certbot).
+
+---
+
+Отлично 👍 Давай соберём **финальные версии** скриптов.
+Я сделаю их так, чтобы они логично шли по цепочке:
+
+1. `backup.sh` — создание архива проекта (вместе с `.git`) и дампа БД.
+2. `restore_all.sh v35` — развертывание проекта из архива, восстановление БД, настройка `venv`, FastAPI (systemd), Nginx, SSL.
+3. После рестора всегда можно дополнительно прогнать `fix_structure.sh`, если tar развернул вложенные папки.
+
+---
+
+## 📦 `backup.sh`
+
+```bash
+#!/bin/bash
+# backup.sh
+set -euo pipefail
+
+PROJECT_DIR="/home/admin/my_projects/legal-assistant-arbitrage"
+BACKUP_DIR="/root/legal-assistant-arbitrage/backup_legal_assistant"
+DATE=$(date +%Y%m%d_%H%M)
+
+mkdir -p "$BACKUP_DIR"
+
+echo "🗜 Создание архива проекта..."
+tar -czf "$BACKUP_DIR/project_${DATE}.tar.gz" \
+  -C "$PROJECT_DIR" \
+  backend/app \
+  requirements.txt \
+  .env \
+  .git
+
+echo "💾 Создание дампа базы..."
+pg_dump -U legal_admin legal_assistant_db > "$BACKUP_DIR/db_${DATE}.sql"
+
+echo "✅ Backup completed:"
+ls -lh "$BACKUP_DIR"/project_${DATE}.tar.gz "$BACKUP_DIR"/db_${DATE}.sql
+```
+
+Запуск:
+
+```bash
+chmod +x backup.sh
+./backup.sh
 ```
 
 ---
 
-Хочешь, я сразу подготовлю для тебя `backup.sh` и `restore_all.sh` как отдельные файлы, чтобы ты мог их просто скопировать на сервер?
+## 🔄 `restore_all.sh v35`
+
+```bash
+#!/bin/bash
+# restore_all.sh v35
+set -euo pipefail
+
+PROJECT_DIR="/home/admin/my_projects/legal-assistant-arbitrage"
+BACKUP_PROJECT="$1"
+BACKUP_DB="$2"
+
+echo "=============================="
+echo "🚀 Запуск restore_all.sh v35: $(date)"
+echo "=============================="
+
+echo "🧹 Очистка окружения..."
+systemctl stop fastapi || true
+rm -rf "$PROJECT_DIR"
+mkdir -p "$PROJECT_DIR"
+
+echo "📦 Распаковка проекта..."
+TMPDIR=$(mktemp -d)
+tar -xzf "$BACKUP_PROJECT" -C "$TMPDIR"
+
+# ищем backend/app внутри архива
+APP_PATH=$(find "$TMPDIR" -type d -path "*/backend/app" | head -n1)
+if [[ -z "$APP_PATH" ]]; then
+  echo "❌ backend/app не найден в архиве"
+  exit 1
+fi
+mkdir -p "$PROJECT_DIR/backend"
+cp -r "$APP_PATH" "$PROJECT_DIR/backend/app"
+
+# переносим .env, requirements.txt и .git
+find "$TMPDIR" -maxdepth 4 -name ".env" -exec cp {} "$PROJECT_DIR/" \; || echo "⚠️ .env не найден"
+find "$TMPDIR" -maxdepth 4 -name "requirements.txt" -exec cp {} "$PROJECT_DIR/" \; || echo "⚠️ requirements.txt не найден"
+find "$TMPDIR" -maxdepth 4 -name ".git" -exec cp -r {} "$PROJECT_DIR/.git" \; || echo "⚠️ .git не найден"
+
+rm -rf "$TMPDIR"
+
+echo "🛠 Установка PostgreSQL..."
+apt-get update -y
+apt-get install -y postgresql postgresql-contrib
+
+echo "🗄 Настройка БД..."
+sudo -u postgres psql <<EOF
+DO \$\$
+BEGIN
+   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'legal_admin') THEN
+      CREATE ROLE legal_admin LOGIN PASSWORD 'legal_pass';
+   END IF;
+END
+\$\$;
+CREATE DATABASE legal_assistant_db OWNER legal_admin;
+GRANT ALL PRIVILEGES ON DATABASE legal_assistant_db TO legal_admin;
+EOF
+
+echo "🗃 Восстановление дампа..."
+psql -U legal_admin -d legal_assistant_db < "$BACKUP_DB" || true
+
+echo "🐍 Python venv..."
+apt-get install -y python3 python3-venv python3-pip build-essential python3-dev
+cd "$PROJECT_DIR"
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip wheel setuptools
+
+if [[ -f requirements.txt ]]; then
+  pip install -r requirements.txt
+else
+  pip install fastapi uvicorn sqlalchemy psycopg2-binary python-dotenv
+fi
+deactivate
+
+echo "⚙️ Настройка FastAPI systemd..."
+cat <<SERVICE | sudo tee /etc/systemd/system/fastapi.service
+[Unit]
+Description=FastAPI app
+After=network.target
+
+[Service]
+User=admin
+WorkingDirectory=$PROJECT_DIR/backend/app
+Environment="PATH=$PROJECT_DIR/venv/bin"
+ExecStart=$PROJECT_DIR/venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=always
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fastapi
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+
+systemctl daemon-reload
+systemctl enable fastapi
+systemctl restart fastapi
+
+echo "🌐 Настройка Nginx..."
+apt-get install -y nginx certbot python3-certbot-nginx
+rm -f /etc/nginx/sites-enabled/*
+cat <<NGINX | sudo tee /etc/nginx/sites-available/legal-assistant
+server {
+    listen 80;
+    server_name a-quilon.com;
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+    }
+}
+NGINX
+ln -s /etc/nginx/sites-available/legal-assistant /etc/nginx/sites-enabled/legal-assistant
+nginx -t && systemctl restart nginx
+
+echo "🔑 SSL Certbot..."
+IP=$(curl -s http://checkip.amazonaws.com)
+DNS_IP=$(dig +short a-quilon.com @8.8.8.8 || true)
+echo "Публичный IP: $IP"
+echo "DNS A-запись: $DNS_IP"
+if [[ "$IP" == "$DNS_IP" ]]; then
+  certbot --nginx -d a-quilon.com --non-interactive --agree-tos -m admin@a-quilon.com || true
+else
+  echo "⚠️ DNS не совпадает с IP, certbot пропущен"
+fi
+
+echo "=============================="
+echo "✅ Восстановление завершено!"
+echo "=============================="
 ```
+
+---
+
+## 🔧 Финальный рабочий цикл
+
+1. Сделать бэкап:
+
+   ```bash
+   ./backup.sh
+   ```
+
+2. Скопировать `project_*.tar.gz` и `db_*.sql` на новый сервер.
+
+3. Восстановить:
+
+   ```bash
+   ./restore_all.sh project_YYYYMMDD_HHMM.tar.gz db_YYYYMMDD_HHMM.sql
+   ```
+
+4. Если структура разворачивается криво (например, появляется `home/admin/...` внутри проекта) → запустить:
+
+   ```bash
+   ./fix_structure.sh
+   ```
+
+5. Проверить FastAPI:
+
+   ```bash
+   systemctl status fastapi
+   curl http://127.0.0.1:8000/docs
+   ```
+
+6. Проверить HTTPS: [https://a-quilon.com/docs](https://a-quilon.com/docs)
+
+---
+
+📌 Вопрос: Хочешь, я ещё добавлю в `restore_all.sh v35` автоматический вызов `fix_structure.sh` сразу после распаковки, чтобы тебе не пришлось гонять его вручную?
+
+---
+
+## 🔧 Fix Structure Script
+
+После восстановления из архива проект может развернуться с вложенными каталогами `home/admin/my_projects/...`.
+Чтобы не тратить время на ручной перенос и очистку, в проект добавлен скрипт **fix\_structure.sh**.
+
+### Скрипт: `fix_structure.sh`
+
+```bash
+#!/bin/bash
+set -euo pipefail
+
+PROJECT_DIR="/home/admin/my_projects/legal-assistant-arbitrage"
+
+echo "🧹 Fixing project structure in $PROJECT_DIR..."
+
+cd "$PROJECT_DIR"
+
+# Восстанавливаем владельца admin
+sudo chown -R admin:admin .
+
+# Удаляем вложенные каталоги, если они случайно появились после распаковки
+rm -rf ./home ./legal-assistant-arbitrage
+
+echo "✅ Project structure fixed!"
+```
+
+### Использование
+
+```bash
+chmod +x fix_structure.sh
+./fix_structure.sh
+```
+
+---
+
+## ⚠️ Возможные проблемы и решения
+
+1. **Нет `.env`** → скрипт создаст дефолтный.
+2. **Нет `requirements.txt`** → ставятся минимальные пакеты (`fastapi uvicorn sqlalchemy psycopg2-binary python-dotenv`).
+3. **Certbot ошибка `Timeout during connect`** → проверь DNS:
+
+   ```bash
+   dig +short a-quilon.com
+   curl -I http://a-quilon.com
+   ```
+4. **Проблемы с правами в venv** → исправить:
+
+   ```bash
+   sudo chown -R admin:admin /home/admin/my_projects/legal-assistant-arbitrage/venv
+   ```
+
+---
+
+## 🛠 Troubleshooting FastAPI
+
+### `ModuleNotFoundError: No module named 'backend'`
+
+* Причина: неверный `WorkingDirectory` или неправильная структура после распаковки.
+* Решение:
+
+  * проверить, что `main.py` находится в `backend/app/main.py`;
+  * при необходимости выполнить `./fix_structure.sh`.
+
+### `ModuleNotFoundError: No module named 'sqlalchemy'`
+
+* Причина: зависимости не установились.
+* Решение:
+
+  ```bash
+  source venv/bin/activate
+  pip install -r requirements.txt
+  ```
+
+### `OSError: [Errno 98] Address already in use`
+
+* Причина: порт `8000` занят.
+* Решение:
+
+  ```bash
+  sudo lsof -i:8000
+  sudo kill -9 <PID>
+  systemctl restart fastapi
+  ```
+
+---
+
+## 🚨 Disaster Recovery Checklist
+
+Этот чеклист позволяет максимально быстро развернуть проект **Legal Assistant Arbitrage** на новом сервере.
+Цель — восстановление работоспособности менее чем за 15 минут.
+
+---
+
+### 1. Подготовка сервера
+
+```bash
+apt-get update -y
+apt-get install -y git curl wget unzip tar gnupg lsb-release sudo vim
+```
+
+### 2. Установка зависимостей
+
+```bash
+apt-get install -y python3 python3-venv python3-pip build-essential python3-dev
+apt-get install -y postgresql postgresql-contrib nginx certbot python3-certbot-nginx
+```
+
+### 3. Копирование бэкапов
+
+```bash
+scp root@OLD_SERVER:/root/legal-assistant-arbitrage/backup_legal_assistant/project_*.tar.gz .
+scp root@OLD_SERVER:/root/legal-assistant-arbitrage/backup_legal_assistant/db_*.sql .
+```
+
+### 4. Восстановление проекта
+
+```bash
+./restore_all.sh project_YYYYMMDD_HHMM.tar.gz db_YYYYMMDD_HHMM.sql
+```
+
+### 5. Проверка структуры
+
+```bash
+./fix_structure.sh
+```
+
+### 6. Проверка FastAPI
+
+```bash
+systemctl status fastapi -l
+curl http://127.0.0.1:8000/docs
+```
+
+### 7. Проверка Nginx + SSL
+
+```bash
+nginx -t
+systemctl restart nginx
+certbot renew --dry-run
+```
+
+### 8. Проверка приложения в браузере
+
+👉 [https://a-quilon.com/docs](https://a-quilon.com/docs)
+
+---
+
+✅ Если всё работает — восстановление завершено!
+
+```
+
+---
+
+Хочешь, я ещё добавлю в этот документ **ASCII-схему пайплайна бэкапа и восстановления** (шаги от backup.sh → restore → fix_structure → FastAPI+Nginx)?
+```
+
+---

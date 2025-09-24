@@ -1,0 +1,15 @@
+[Unit]
+Description=FastAPI app
+After=network.target
+
+[Service]
+User=admin
+Group=admin
+WorkingDirectory=/home/admin/my_projects/legal-assistant-arbitrage
+Environment="DATABASE_URL=postgresql://admin:admin14092025@localhost:5432/legal_assistant_db"
+ExecStart=/home/admin/my_projects/legal-assistant-arbitrage/venv/bin/uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
