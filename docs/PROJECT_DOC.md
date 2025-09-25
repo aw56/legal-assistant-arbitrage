@@ -813,13 +813,281 @@ certbot renew --dry-run
 
 ---
 
-✅ Если всё работает — восстановление завершено!
+## 📦 Backup Script
 
+```bash
+#!/bin/bash
+# backup.sh
+set -euo pipefail
+
+PROJECT_DIR="/home/admin/my_projects/legal-assistant-arbitrage"
+BACKUP_DIR="/root/legal-assistant-arbitrage/backup_legal_assistant"
+DATE=$(date +%Y%m%d_%H%M)
+
+mkdir -p "$BACKUP_DIR"
+
+echo "🗜 Создание архива проекта..."
+tar -czf "$BACKUP_DIR/project_${DATE}.tar.gz" \
+  -C "$PROJECT_DIR" \
+  backend/app \
+  requirements.txt \
+  .env \
+  .git
+
+echo "💾 Создание дампа базы..."
+pg_dump -U legal_admin legal_assistant_db > "$BACKUP_DIR/db_${DATE}.sql"
+
+echo "✅ Backup completed:"
+ls -lh "$BACKUP_DIR"/project_${DATE}.tar.gz "$BACKUP_DIR"/db_${DATE}.sql
+````
+
+---
+
+## 🔄 Restore Script (restore_all.sh v35)
+
+```bash
+#!/bin/bash
+# restore_all.sh v35
+set -euo pipefail
+
+PROJECT_DIR="/home/admin/my_projects/legal-assistant-arbitrage"
+BACKUP_PROJECT="$1"
+BACKUP_DB="$2"
+
+echo "=============================="
+echo "🚀 Запуск restore_all.sh v35: $(date)"
+echo "=============================="
+
+echo "🧹 Очистка окружения..."
+systemctl stop fastapi || true
+rm -rf "$PROJECT_DIR"
+mkdir -p "$PROJECT_DIR"
+
+echo "📦 Распаковка проекта..."
+TMPDIR=$(mktemp -d)
+tar -xzf "$BACKUP_PROJECT" -C "$TMPDIR"
+
+APP_PATH=$(find "$TMPDIR" -type d -path "*/backend/app" | head -n1)
+if [[ -z "$APP_PATH" ]]; then
+  echo "❌ backend/app не найден в архиве"
+  exit 1
+fi
+mkdir -p "$PROJECT_DIR/backend"
+cp -r "$APP_PATH" "$PROJECT_DIR/backend/app"
+
+find "$TMPDIR" -maxdepth 4 -name ".env" -exec cp {} "$PROJECT_DIR/" \; || echo "⚠️ .env не найден"
+find "$TMPDIR" -maxdepth 4 -name "requirements.txt" -exec cp {} "$PROJECT_DIR/" \; || echo "⚠️ requirements.txt не найден"
+find "$TMPDIR" -maxdepth 4 -name ".git" -exec cp -r {} "$PROJECT_DIR/.git" \; || echo "⚠️ .git не найден"
+
+rm -rf "$TMPDIR"
+
+echo "🛠 Установка PostgreSQL..."
+apt-get update -y
+apt-get install -y postgresql postgresql-contrib
+
+echo "🗄 Настройка БД..."
+sudo -u postgres psql <<EOF
+DO \$\$
+BEGIN
+   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'legal_admin') THEN
+      CREATE ROLE legal_admin LOGIN PASSWORD 'legal_pass';
+   END IF;
+END
+\$\$;
+CREATE DATABASE legal_assistant_db OWNER legal_admin;
+GRANT ALL PRIVILEGES ON DATABASE legal_assistant_db TO legal_admin;
+EOF
+
+echo "🗃 Восстановление дампа..."
+psql -U legal_admin -d legal_assistant_db < "$BACKUP_DB" || true
+
+echo "🐍 Python venv..."
+apt-get install -y python3 python3-venv python3-pip build-essential python3-dev
+cd "$PROJECT_DIR"
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip wheel setuptools
+
+if [[ -f requirements.txt ]]; then
+  pip install -r requirements.txt
+else
+  pip install fastapi uvicorn sqlalchemy psycopg2-binary python-dotenv
+fi
+deactivate
+
+echo "⚙️ Настройка FastAPI systemd..."
+cat <<SERVICE | sudo tee /etc/systemd/system/fastapi.service
+[Unit]
+Description=FastAPI app
+After=network.target
+
+[Service]
+User=admin
+WorkingDirectory=$PROJECT_DIR/backend/app
+Environment="PATH=$PROJECT_DIR/venv/bin"
+ExecStart=$PROJECT_DIR/venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=always
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fastapi
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+
+systemctl daemon-reload
+systemctl enable fastapi
+systemctl restart fastapi
+
+echo "🌐 Настройка Nginx..."
+apt-get install -y nginx certbot python3-certbot-nginx
+rm -f /etc/nginx/sites-enabled/*
+cat <<NGINX | sudo tee /etc/nginx/sites-available/legal-assistant
+server {
+    listen 80;
+    server_name a-quilon.com;
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+    }
+}
+NGINX
+ln -s /etc/nginx/sites-available/legal-assistant /etc/nginx/sites-enabled/legal-assistant
+nginx -t && systemctl restart nginx
+
+echo "🔑 SSL Certbot..."
+IP=$(curl -s http://checkip.amazonaws.com)
+DNS_IP=$(dig +short a-quilon.com @8.8.8.8 || true)
+echo "Публичный IP: $IP"
+echo "DNS A-запись: $DNS_IP"
+if [[ "$IP" == "$DNS_IP" ]]; then
+  certbot --nginx -d a-quilon.com --non-interactive --agree-tos -m admin@a-quilon.com || true
+else
+  echo "⚠️ DNS не совпадает с IP, certbot пропущен"
+fi
+
+echo "=============================="
+echo "✅ Восстановление завершено!"
+echo "=============================="
 ```
 
 ---
 
-Хочешь, я ещё добавлю в этот документ **ASCII-схему пайплайна бэкапа и восстановления** (шаги от backup.sh → restore → fix_structure → FastAPI+Nginx)?
+## 🔧 Fix Structure Script
+
+```bash
+#!/bin/bash
+set -euo pipefail
+
+PROJECT_DIR="/home/admin/my_projects/legal-assistant-arbitrage"
+
+echo "🧹 Fixing project structure in $PROJECT_DIR..."
+
+cd "$PROJECT_DIR"
+
+sudo chown -R admin:admin .
+rm -rf ./home ./legal-assistant-arbitrage
+
+echo "✅ Project structure fixed!"
 ```
+
+---
+
+## 🛠 Troubleshooting FastAPI
+
+### Ошибка: `ModuleNotFoundError: No module named 'backend'`
+
+➡ Причина: неверный `WorkingDirectory` в systemd.
+✅ Решение: указываем `WorkingDirectory=$PROJECT_DIR/backend/app`.
+
+---
+
+### Ошибка: `ModuleNotFoundError: No module named 'sqlalchemy'`
+
+➡ Причина: не установлены зависимости.
+✅ Решение: `pip install -r requirements.txt` или `pip install sqlalchemy`.
+
+---
+
+### Ошибка: `port 8000 already in use`
+
+➡ Причина: запущен старый процесс uvicorn.
+✅ Решение:
+
+```bash
+sudo lsof -i:8000
+sudo kill -9 <PID>
+```
+
+---
+
+## 🚨 Disaster Recovery Checklist
+
+1. Проверить доступ `ssh admin@server`.
+2. Убедиться, что бэкап есть: `project_*.tar.gz` + `db_*.sql`.
+3. Выполнить `restore_all.sh`.
+4. Запустить `fix_structure.sh`, если появились вложенные папки.
+5. Проверить FastAPI: `curl http://127.0.0.1:8000/docs`.
+6. Проверить HTTPS: [https://a-quilon.com/docs](https://a-quilon.com/docs).
+
+---
+
+## 🌱 Git Workflow
+
+* Проверить статус:
+
+  ```bash
+  git status
+  ```
+* Добавить изменения:
+
+  ```bash
+  git add .
+  ```
+* Закоммитить:
+
+  ```bash
+  git commit -m "Обновление"
+  ```
+* Получить свежие изменения:
+
+  ```bash
+  git pull origin main --rebase
+  ```
+* Отправить изменения:
+
+  ```bash
+  git push origin main
+  ```
+
+---
+
+## 👤 Работа с пользователем admin на Plesk
+
+* Пароль `admin` меняется только через Plesk:
+
+  ```bash
+  plesk bin admin --set-password -passwd "NEW_SECURE_PASS"
+  ```
+
+  ❌ Нельзя использовать логин в пароле (`Password should not contain login`).
+
+* Для `sudo`-прав root может добавить:
+
+  ```bash
+  usermod -aG sudo admin
+  ```
+
+* Если `passwd admin` ломается → значит систему контролирует Plesk. Использовать только `plesk bin admin`.
+
+* Для SSH без пароля → добавить ключ:
+
+  ```bash
+  mkdir -p ~/.ssh
+  chmod 700 ~/.ssh
+  echo "YOUR_PUBLIC_KEY" >> ~/.ssh/authorized_keys
+  chmod 600 ~/.ssh/authorized_keys
+  ```
 
 ---

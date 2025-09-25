@@ -12,3 +12,8 @@ app.include_router(decisions.router)
 @app.get("/")
 def read_root():
     return {"message": "Legal Assistant API is running"}
+
+# ⬇️ Healthcheck эндпоинт
+@app.get("/health")
+def health():
+    return {"status": "ok"}
